@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2013, Adcash Inc.
+ * Copyright (c) 2010-2013, Adcash OU.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
