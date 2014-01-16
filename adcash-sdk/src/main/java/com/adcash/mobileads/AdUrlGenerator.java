@@ -41,6 +41,11 @@ public class AdUrlGenerator extends BaseUrlGenerator {
         return this;
     }
 
+    public AdUrlGenerator withFacebookSupported(boolean enabled) {
+        mFacebookSupportEnabled = enabled;
+        return this;
+    }
+
     public AdUrlGenerator withLocation(Location location) {
         mLocation = location;
         return this;
@@ -92,7 +97,7 @@ public class AdUrlGenerator extends BaseUrlGenerator {
 
         setTrackingId(getTrackingId());
         
-        String keywords = AdUrlGenerator.addKeyword(mKeywords, AdUrlGenerator.getFacebookKeyword(mContext));
+        String keywords = AdUrlGenerator.addKeyword(mKeywords, AdUrlGenerator.getFacebookKeyword(mContext, mFacebookSupportEnabled));
         setKeywords(keywords);
         
         return getFinalUrlString();
@@ -109,7 +114,11 @@ public class AdUrlGenerator extends BaseUrlGenerator {
     }
 
 
-    private static String getFacebookKeyword(Context context) {
+    private static String getFacebookKeyword(Context context, final boolean enabled) {
+        if (!enabled) {
+            return null;
+        }
+
         try {
             Class<?> facebookKeywordProviderClass = Class.forName("com.adcash.mobileads.FacebookKeywordProvider");
             Method getKeywordMethod = facebookKeywordProviderClass.getMethod("getKeyword", Context.class);

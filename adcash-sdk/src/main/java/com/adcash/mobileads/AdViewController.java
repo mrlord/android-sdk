@@ -1,19 +1,19 @@
 /*
- * Copyright (c) 2010 - 2013, Adcash OU and MoPub Inc.
+ * Copyright (c) 2010-2013, Adcash Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
  * met:
  *
- * * Redistributions of source code must retain the above copyright
+ *  Redistributions of source code must retain the above copyright
  *   notice, this list of conditions and the following disclaimer.
  *
- * * Redistributions in binary form must reproduce the above copyright
+ *  Redistributions in binary form must reproduce the above copyright
  *   notice, this list of conditions and the following disclaimer in the
  *   documentation and/or other materials provided with the distribution.
  *
- * * Neither the name of 'MoPub Inc.' nor the names of its contributors
+ *  Neither the name of 'MoPub Inc.' nor the names of its contributors
  *   may be used to endorse or promote products derived from this software
  *   without specific prior written permission.
  *
@@ -39,16 +39,12 @@ import android.location.LocationManager;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.os.Handler;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
-import android.webkit.WebView;
 import android.widget.FrameLayout;
-import com.adcash.mobileads.Log;
-
 import com.adcash.mobileads.AdcashView.LocationAwareness;
 import com.adcash.mobileads.factories.AdFetcherFactory;
-import com.adcash.mobileads.factories.HtmlBannerWebViewFactory;
-import com.adcash.mobileads.factories.HtmlInterstitialWebViewFactory;
 import com.adcash.mobileads.factories.HttpClientFactory;
 import com.adcash.mobileads.util.Dips;
 import org.apache.http.HttpResponse;
@@ -56,18 +52,14 @@ import org.apache.http.client.methods.HttpGet;
 import org.apache.http.impl.client.DefaultHttpClient;
 
 import java.math.BigDecimal;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.WeakHashMap;
+import java.util.*;
 
 import static android.Manifest.permission.ACCESS_NETWORK_STATE;
-import static com.adcash.mobileads.AdFetcher.CLICKTHROUGH_URL_HEADER;
-import static com.adcash.mobileads.AdFetcher.REDIRECT_URL_HEADER;
-import static com.adcash.mobileads.util.HttpResponses.extractHeader;
-import static com.adcash.mobileads.util.HttpResponses.extractIntHeader;
+import static com.adcash.mobileads.AdcashView.DEFAULT_LOCATION_PRECISION;
 
 public class AdViewController {
-    private static final int MINIMUM_REFRESH_TIME_MILLISECONDS = 10000;
+    static final int MINIMUM_REFRESH_TIME_MILLISECONDS = 10000;
+    static final int DEFAULT_REFRESH_TIME_MILLISECONDS = 60000;
     private static final FrameLayout.LayoutParams WRAP_AND_CENTER_LAYOUT_PARAMS =
             new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -77,31 +69,24 @@ public class AdViewController {
 
     private final Context mContext;
     private AdcashView mAdcashView;
-    private Map<String, Object> mLocalExtras;
     private final AdUrlGenerator mUrlGenerator;
-    private boolean mAutorefreshEnabled;
-    private final String mUserAgent;
     private AdFetcher mAdFetcher;
-
+    private AdConfiguration mAdConfiguration;
     private final Runnable mRefreshRunnable;
-    private String mRedirectUrl;
-    private String mClickthroughUrl;
-    private String mImpressionUrl;
-    private int mWidth;
-    private int mHeight;
-    private int mRefreshTimeMilliseconds;
 
-    private String mAdUnitId;
-    private String mKeywords;
-    private Location mLocation;
-    private boolean mTesting;
-    private String mResponseString;
     private boolean mIsDestroyed;
     private Handler mHandler;
-
     private boolean mIsLoading;
-    private String mFailUrl;
     private String mUrl;
+
+    private Map<String, Object> mLocalExtras = new HashMap<String, Object>();
+    private boolean mAutoRefreshEnabled = true;
+    private String mKeywords;
+    private Location mLocation;
+    private LocationAwareness mLocationAwareness = LocationAwareness.LOCATION_AWARENESS_NORMAL;
+    private int mLocationPrecision = DEFAULT_LOCATION_PRECISION;
+    private boolean mIsFacebookSupported = true;
+    private boolean mIsTesting;
 
     protected static void setShouldHonorServerDimensions(View view) {
         sViewShouldHonorServerDimensions.put(view, true);
@@ -115,24 +100,16 @@ public class AdViewController {
         mContext = context;
         mAdcashView = view;
 
-        mLocalExtras = new HashMap<String, Object>();
         mUrlGenerator = new AdUrlGenerator(context);
+        mAdConfiguration = new AdConfiguration(mContext);
 
-        mAutorefreshEnabled = true;
+        mAdFetcher = AdFetcherFactory.create(this, mAdConfiguration.getUserAgent());
+
         mRefreshRunnable = new Runnable() {
             public void run() {
                 loadAd();
             }
         };
-
-        /* Store user agent string at beginning to prevent NPE during background
-         * thread operations.
-         */
-        mUserAgent = new WebView(context).getSettings().getUserAgentString();
-        mAdFetcher = AdFetcherFactory.create(this, mUserAgent);
-
-        HtmlBannerWebViewFactory.initialize(context);
-        HtmlInterstitialWebViewFactory.initialize(context);
 
         mHandler = new Handler();
     }
@@ -142,7 +119,7 @@ public class AdViewController {
     }
 
     public void loadAd() {
-        if (mAdUnitId == null) {
+        if (mAdConfiguration.getAdUnitId() == null) {
             Log.d("Adcash", "Can't load an ad in this ad view because the ad unit ID is null. " +
                     "Did you forget to call setAdUnitId()?");
             return;
@@ -154,7 +131,9 @@ public class AdViewController {
             return;
         }
 
-        if (mLocation == null) mLocation = getLastKnownLocation();
+        if (mLocation == null) {
+            mLocation = getLastKnownLocation();
+        }
 
         // tested (remove me when the rest of this is tested)
         String adUrl = generateAdUrl();
@@ -166,12 +145,14 @@ public class AdViewController {
 
         Log.d("Adcash", "Loading url: " + url);
         if (mIsLoading) {
-            Log.i("Adcash", "Already loading an ad for " + mAdUnitId + ", wait to finish.");
+            if (mAdConfiguration.getAdUnitId() != null) {
+                Log.i("Adcash", "Already loading an ad for " + mAdConfiguration.getAdUnitId() + ", wait to finish.");
+            }
             return;
         }
 
         mUrl = url;
-        mFailUrl = null;
+        mAdConfiguration.setFailUrl(null);
         mIsLoading = true;
 
         fetchAd(mUrl);
@@ -187,9 +168,9 @@ public class AdViewController {
 
         Log.v("Adcash", "AdcashErrorCode: " + (errorCode == null ? "" : errorCode.toString()));
 
-        if (mFailUrl != null) {
-            Log.d("Adcash", "Loading failover url: " + mFailUrl);
-            loadNonJavascript(mFailUrl);
+        if (mAdConfiguration.getFailUrl() != null) {
+            Log.d("Adcash", "Loading failover url: " + mAdConfiguration.getFailUrl());
+            loadNonJavascript(mAdConfiguration.getFailUrl());
         } else {
             // No other URLs to try, so signal a failure.
             adDidFail(AdcashErrorCode.NO_FILL);
@@ -197,7 +178,7 @@ public class AdViewController {
     }
 
     void setFailUrl(String failUrl) {
-        this.mFailUrl = failUrl;
+        mAdConfiguration.setFailUrl(failUrl);
     }
 
     void setNotLoading() {
@@ -212,6 +193,14 @@ public class AdViewController {
         mKeywords = keywords;
     }
 
+    public boolean isFacebookSupported() {
+        return mIsFacebookSupported;
+    }
+
+    public void setFacebookSupported(boolean enabled) {
+        mIsFacebookSupported = enabled;
+    }
+
     public Location getLocation() {
         return mLocation;
     }
@@ -221,11 +210,11 @@ public class AdViewController {
     }
 
     public String getAdUnitId() {
-        return mAdUnitId;
+        return mAdConfiguration.getAdUnitId();
     }
 
     public void setAdUnitId(String adUnitId) {
-        mAdUnitId = adUnitId;
+        mAdConfiguration.setAdUnitId(adUnitId);
     }
 
     public void setTimeout(int milliseconds) {
@@ -235,48 +224,67 @@ public class AdViewController {
     }
 
     public int getAdWidth() {
-        return mWidth;
+        return mAdConfiguration.getWidth();
     }
 
     public int getAdHeight() {
-        return mHeight;
+        return mAdConfiguration.getHeight();
     }
 
     public String getClickthroughUrl() {
-        return mClickthroughUrl;
+        return mAdConfiguration.getClickthroughUrl();
     }
 
-    public void setClickthroughUrl(String url) {
-        mClickthroughUrl = url;
+    @Deprecated
+    public void setClickthroughUrl(String clickthroughUrl) {
+        mAdConfiguration.setClickthroughUrl(clickthroughUrl);
     }
 
     public String getRedirectUrl() {
-        return mRedirectUrl;
+        return mAdConfiguration.getRedirectUrl();
     }
 
     public String getResponseString() {
-        return mResponseString;
+        return mAdConfiguration.getResponseString();
     }
 
     public boolean getAutorefreshEnabled() {
-        return mAutorefreshEnabled;
+        return mAutoRefreshEnabled;
     }
 
     public void setAutorefreshEnabled(boolean enabled) {
-        mAutorefreshEnabled = enabled;
+        mAutoRefreshEnabled = enabled;
 
-        Log.d("Adcash", "Automatic refresh for " + mAdUnitId + " set to: " + enabled + ".");
+        if (mAdConfiguration.getAdUnitId() != null) {
+            Log.d("Adcash", "Automatic refresh for " + mAdConfiguration + " set to: " + enabled + ".");
 
-        if (!mAutorefreshEnabled) cancelRefreshTimer();
-        else scheduleRefreshTimerIfEnabled();
+        }
+
+        if (mAutoRefreshEnabled) {
+            scheduleRefreshTimerIfEnabled();
+        } else {
+            cancelRefreshTimer();
+        }
     }
 
     public boolean getTesting() {
-        return mTesting;
+        return mIsTesting;
     }
 
-    public void setTesting(boolean testing) {
-        mTesting = testing;
+    public void setTesting(boolean enabled) {
+        mIsTesting = enabled;
+    }
+
+    int getLocationPrecision() {
+        return mLocationPrecision;
+    }
+
+    void setLocationPrecision(int precision) {
+        mLocationPrecision = Math.max(0, precision);
+    }
+
+    AdConfiguration getAdConfiguration() {
+        return mAdConfiguration;
     }
 
     boolean isDestroyed() {
@@ -301,12 +309,7 @@ public class AdViewController {
         mAdFetcher.cleanup();
         mAdFetcher = null;
 
-        HtmlBannerWebViewFactory.cleanup();
-        HtmlInterstitialWebViewFactory.cleanup();
-
-        mLocalExtras = null;
-
-        mResponseString = null;
+        mAdConfiguration.cleanup();
 
         mAdcashView = null;
 
@@ -315,58 +318,34 @@ public class AdViewController {
     }
 
     void configureUsingHttpResponse(final HttpResponse response) {
-        // Print the ad network type to the console.
-        String networkType = extractHeader(response, "X-Networktype");
-        if (networkType != null) Log.i("Adcash", "Fetching ad network type: " + networkType);
+        mAdConfiguration.addHttpResponse(response);
+    }
 
-        // Set the redirect URL prefix: navigating to any matching URLs will send us to the browser.
-        mRedirectUrl = extractHeader(response, REDIRECT_URL_HEADER);
-        // Set the URL that is prepended to links for click-tracking purposes.
-        mClickthroughUrl = extractHeader(response, CLICKTHROUGH_URL_HEADER);
-        // Set the fall-back URL to be used if the current request fails.
-        setFailUrl(extractHeader(response, "X-Failurl"));
-        // Set the URL to be used for impression tracking.
-        mImpressionUrl = extractHeader(response, "X-Imptracker");
-        // Set the width and height.
-        mWidth = extractIntHeader(response, "X-Width");
-        mHeight = extractIntHeader(response, "X-Height");
-
-        // Set the auto-refresh time. A timer will be scheduled upon ad success or failure.
-        if (!response.containsHeader("X-Refreshtime")) {
-            mRefreshTimeMilliseconds = 0;
-        } else {
-            mRefreshTimeMilliseconds = extractIntHeader(response, "X-Refreshtime") * 1000;
-            mRefreshTimeMilliseconds = Math.max(
-                    mRefreshTimeMilliseconds,
-                    MINIMUM_REFRESH_TIME_MILLISECONDS);
-        }
+    Integer getAdTimeoutDelay() {
+        return mAdConfiguration.getAdTimeoutDelay();
     }
 
     int getRefreshTimeMilliseconds() {
-        return mRefreshTimeMilliseconds;
+        return mAdConfiguration.getRefreshTimeMilliseconds();
     }
 
+    @Deprecated
     void setRefreshTimeMilliseconds(int refreshTimeMilliseconds) {
-        mRefreshTimeMilliseconds = refreshTimeMilliseconds;
+        mAdConfiguration.setRefreshTimeMilliseconds(refreshTimeMilliseconds);
     }
 
     void trackImpression() {
         new Thread(new Runnable() {
             public void run () {
-                if (mImpressionUrl == null)
-                	{
-                    Log.d("Adcash", "No impression tracking url");
-                    return ;
-                	}
+                if (mAdConfiguration.getImpressionUrl() == null) return;
 
                 DefaultHttpClient httpClient = HttpClientFactory.create();
                 try {
-                    Log.d("Adcash", "Sending impression tracking to : " + mImpressionUrl);
-                    HttpGet httpget = new HttpGet(mImpressionUrl);
-                    httpget.addHeader("User-Agent", mUserAgent);
+                    HttpGet httpget = new HttpGet(mAdConfiguration.getImpressionUrl());
+                    httpget.addHeader("User-Agent", mAdConfiguration.getUserAgent());
                     httpClient.execute(httpget);
                 } catch (Exception e) {
-                    Log.d("Adcash", "Impression tracking failed : " + mImpressionUrl, e);
+                    Log.d("Adcash", "Impression tracking failed : " + mAdConfiguration.getImpressionUrl(), e);
                 } finally {
                     httpClient.getConnectionManager().shutdown();
                 }
@@ -377,16 +356,16 @@ public class AdViewController {
     void registerClick() {
         new Thread(new Runnable() {
             public void run () {
-                if (mClickthroughUrl == null) return;
+                if (mAdConfiguration.getClickthroughUrl() == null) return;
 
                 DefaultHttpClient httpClient = HttpClientFactory.create();
                 try {
-                    Log.d("Adcash", "Tracking click for: " + mClickthroughUrl);
-                    HttpGet httpget = new HttpGet(mClickthroughUrl);
-                    httpget.addHeader("User-Agent", mUserAgent);
+                    Log.d("Adcash", "Tracking click for: " + mAdConfiguration.getClickthroughUrl());
+                    HttpGet httpget = new HttpGet(mAdConfiguration.getClickthroughUrl());
+                    httpget.addHeader("User-Agent", mAdConfiguration.getUserAgent());
                     httpClient.execute(httpget);
                 } catch (Exception e) {
-                    Log.d("Adcash", "Click tracking failed: " + mClickthroughUrl, e);
+                    Log.d("Adcash", "Click tracking failed: " + mAdConfiguration.getClickthroughUrl(), e);
                 } finally {
                     httpClient.getConnectionManager().shutdown();
                 }
@@ -407,8 +386,9 @@ public class AdViewController {
 
     String generateAdUrl() {
         return mUrlGenerator
-                .withAdUnitId(mAdUnitId)
+                .withAdUnitId(mAdConfiguration.getAdUnitId())
                 .withKeywords(mKeywords)
+                .withFacebookSupported(mIsFacebookSupported)
                 .withLocation(mLocation)
                 .generateUrlString(getServerHostname());
     }
@@ -422,8 +402,8 @@ public class AdViewController {
 
     void scheduleRefreshTimerIfEnabled() {
         cancelRefreshTimer();
-        if (mAutorefreshEnabled && mRefreshTimeMilliseconds > 0) {
-            mHandler.postDelayed(mRefreshRunnable, mRefreshTimeMilliseconds);
+        if (mAutoRefreshEnabled && mAdConfiguration.getRefreshTimeMilliseconds() > 0) {
+            mHandler.postDelayed(mRefreshRunnable, mAdConfiguration.getRefreshTimeMilliseconds());
         }
 
     }
@@ -445,7 +425,7 @@ public class AdViewController {
     }
 
     private String getServerHostname() {
-        return mTesting ? AdcashView.HOST_FOR_TESTING : AdcashView.HOST;
+        return mIsTesting ? AdcashView.HOST_FOR_TESTING : AdcashView.HOST;
     }
 
     private boolean isNetworkAvailable() {
@@ -460,15 +440,30 @@ public class AdViewController {
         return networkInfo != null && networkInfo.isConnected();
     }
 
-    void setAdContentView(View view) {
-        getAdcashView().removeAllViews();
-        getAdcashView().addView(view, getAdLayoutParams(view));
+    void setAdContentView(final View view) {
+        // XXX: This method is called from the WebViewClient's callbacks, which has caused an error on a small portion of devices
+        // We suspect that the code below may somehow be running on the wrong UI Thread in the rare case.
+        // see: http://stackoverflow.com/questions/10426120/android-got-calledfromwrongthreadexception-in-onpostexecute-how-could-it-be
+        mHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                AdcashView adCashView = getAdcashView();
+                if (adCashView == null) {
+                    return;
+                }
+                adCashView.removeAllViews();
+                adCashView.addView(view, getAdLayoutParams(view));
+            }
+        });
     }
 
     private FrameLayout.LayoutParams getAdLayoutParams(View view) {
-        if (getShouldHonorServerDimensions(view) && mWidth > 0 && mHeight > 0) {
-            int scaledWidth = Dips.asIntPixels(mWidth, mContext);
-            int scaledHeight = Dips.asIntPixels(mHeight, mContext);
+        int width = mAdConfiguration.getWidth();
+        int height = mAdConfiguration.getHeight();
+
+        if (getShouldHonorServerDimensions(view) && width > 0 && height > 0) {
+            int scaledWidth = Dips.asIntPixels(width, mContext);
+            int scaledHeight = Dips.asIntPixels(height, mContext);
 
             return new FrameLayout.LayoutParams(scaledWidth, scaledHeight, Gravity.CENTER);
         } else {
@@ -484,11 +479,9 @@ public class AdViewController {
      * - Location awareness is disabled in the parent AdcashView
      */
     private Location getLastKnownLocation() {
-        LocationAwareness locationAwareness = getAdcashView().getLocationAwareness();
-        int locationPrecision = getAdcashView().getLocationPrecision();
         Location result;
 
-        if (locationAwareness == LocationAwareness.LOCATION_AWARENESS_DISABLED) {
+        if (mLocationAwareness == LocationAwareness.LOCATION_AWARENESS_DISABLED) {
             return null;
         }
 
@@ -522,29 +515,21 @@ public class AdViewController {
         else result = networkLocation;
 
         // Truncate latitude/longitude to the number of digits specified by locationPrecision.
-        if (locationAwareness == LocationAwareness.LOCATION_AWARENESS_TRUNCATED) {
+        if (mLocationAwareness == LocationAwareness.LOCATION_AWARENESS_TRUNCATED) {
             double lat = result.getLatitude();
             double truncatedLat = BigDecimal.valueOf(lat)
-                    .setScale(locationPrecision, BigDecimal.ROUND_HALF_DOWN)
+                    .setScale(mLocationPrecision, BigDecimal.ROUND_HALF_DOWN)
                     .doubleValue();
             result.setLatitude(truncatedLat);
 
             double lon = result.getLongitude();
             double truncatedLon = BigDecimal.valueOf(lon)
-                    .setScale(locationPrecision, BigDecimal.ROUND_HALF_DOWN)
+                    .setScale(mLocationPrecision, BigDecimal.ROUND_HALF_DOWN)
                     .doubleValue();
             result.setLongitude(truncatedLon);
         }
 
         return result;
-    }
-
-    Context getContext() {
-        return mContext;
-    }
-
-    HtmlBannerWebView getAdWebView() {
-        return null;
     }
 
     @Deprecated

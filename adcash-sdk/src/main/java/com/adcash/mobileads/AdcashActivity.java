@@ -1,19 +1,19 @@
 /*
- * Copyright (c) 2010 - 2013, Adcash OU and MoPub Inc.
+ * Copyright (c) 2010-2013, Adcash Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
  * met:
  *
- * * Redistributions of source code must retain the above copyright
+ *  Redistributions of source code must retain the above copyright
  *   notice, this list of conditions and the following disclaimer.
  *
- * * Redistributions in binary form must reproduce the above copyright
+ *  Redistributions in binary form must reproduce the above copyright
  *   notice, this list of conditions and the following disclaimer in the
  *   documentation and/or other materials provided with the distribution.
  *
- * * Neither the name of 'MoPub Inc.' nor the names of its contributors
+ *  Neither the name of 'MoPub Inc.' nor the names of its contributors
  *   may be used to endorse or promote products derived from this software
  *   without specific prior written permission.
  *
@@ -32,33 +32,73 @@
 
 package com.adcash.mobileads;
 
+import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
+import android.os.Bundle;
+import android.util.Log;
 import android.view.View;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import com.adcash.mobileads.factories.HtmlInterstitialWebViewFactory;
 
+import static com.adcash.mobileads.AdFetcher.AD_CONFIGURATION_KEY;
 import static com.adcash.mobileads.AdFetcher.CLICKTHROUGH_URL_KEY;
 import static com.adcash.mobileads.AdFetcher.HTML_RESPONSE_BODY_KEY;
 import static com.adcash.mobileads.AdFetcher.REDIRECT_URL_KEY;
 import static com.adcash.mobileads.AdFetcher.SCROLLABLE_KEY;
+import static com.adcash.mobileads.BaseInterstitialActivity.JavaScriptWebViewCallbacks.WEB_VIEW_DID_APPEAR;
+import static com.adcash.mobileads.BaseInterstitialActivity.JavaScriptWebViewCallbacks.WEB_VIEW_DID_CLOSE;
 import static com.adcash.mobileads.CustomEventInterstitial.CustomEventInterstitialListener;
+import static com.adcash.mobileads.HtmlWebViewClient.ADCASH_FAIL_LOAD;
+import static com.adcash.mobileads.HtmlWebViewClient.ADCASH_FINISH_LOAD;
 
 public class AdcashActivity extends BaseInterstitialActivity {
-    private HtmlInterstitialWebView htmlInterstitialWebView;
+    private HtmlInterstitialWebView mHtmlInterstitialWebView;
 
-    public static void start(Context context, String htmlData, boolean isScrollable, String redirectUrl, String clickthroughUrl) {
-        Intent intent = createIntent(context, htmlData, isScrollable, redirectUrl, clickthroughUrl);
-        context.startActivity(intent);
+    public static void start(Context context, String htmlData, boolean isScrollable, String redirectUrl, String clickthroughUrl, AdConfiguration adConfiguration) {
+        Intent intent = createIntent(context, htmlData, isScrollable, redirectUrl, clickthroughUrl, adConfiguration);
+        try {
+            context.startActivity(intent);
+        } catch (ActivityNotFoundException anfe) {
+            Log.d("AdcashActivity", "AdcashActivity not found - did you declare it in AndroidManifest.xml?");
+        }
     }
 
-    public static Intent createIntent(Context context, String htmlData, boolean isScrollable, String redirectUrl, String clickthroughUrl) {
+    static Intent createIntent(Context context, String htmlData, boolean isScrollable, String redirectUrl, String clickthroughUrl, AdConfiguration adConfiguration) {
         Intent intent = new Intent(context, AdcashActivity.class);
         intent.putExtra(HTML_RESPONSE_BODY_KEY, htmlData);
         intent.putExtra(SCROLLABLE_KEY, isScrollable);
         intent.putExtra(CLICKTHROUGH_URL_KEY, clickthroughUrl);
         intent.putExtra(REDIRECT_URL_KEY, redirectUrl);
+        intent.putExtra(AD_CONFIGURATION_KEY, adConfiguration);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         return intent;
+    }
+
+    static void preRenderHtml(final Context context, final CustomEventInterstitialListener customEventInterstitialListener, String htmlData) {
+        HtmlInterstitialWebView dummyWebView = HtmlInterstitialWebViewFactory.create(context, customEventInterstitialListener, false, null, null, null);
+        dummyWebView.enablePlugins(false);
+
+        dummyWebView.addAdcashUriJavascriptInterface(new HtmlInterstitialWebView.AdcashUriJavascriptFireFinishLoadListener() {
+            @Override
+            public void onInterstitialLoaded() {
+                customEventInterstitialListener.onInterstitialLoaded();
+            }
+        });
+        dummyWebView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                if (url.equals(ADCASH_FINISH_LOAD)) {
+                    customEventInterstitialListener.onInterstitialLoaded();
+                } else if (url.equals(ADCASH_FAIL_LOAD)) {
+                    customEventInterstitialListener.onInterstitialFailed(null);
+                }
+
+                return true;
+            }
+        });
+        dummyWebView.loadHtmlResponse(htmlData);
     }
 
     @Override
@@ -69,24 +109,30 @@ public class AdcashActivity extends BaseInterstitialActivity {
         String clickthroughUrl = intent.getStringExtra(CLICKTHROUGH_URL_KEY);
         String htmlResponse = intent.getStringExtra(HTML_RESPONSE_BODY_KEY);
 
-        htmlInterstitialWebView = HtmlInterstitialWebViewFactory.create(new BroadcastingInterstitialListener(), isScrollable, redirectUrl, clickthroughUrl);
-        htmlInterstitialWebView.loadHtmlResponse(htmlResponse);
+        mHtmlInterstitialWebView = HtmlInterstitialWebViewFactory.create(getApplicationContext(), new BroadcastingInterstitialListener(), isScrollable, redirectUrl, clickthroughUrl, getAdConfiguration());
+        mHtmlInterstitialWebView.loadHtmlResponse(htmlResponse);
 
-        return htmlInterstitialWebView;
+        return mHtmlInterstitialWebView;
     }
-    
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        broadcastInterstitialAction(ACTION_INTERSTITIAL_SHOW);
+    }
+
     @Override
     protected void onDestroy() {
-    	Log.d("Adcash", "Called destroy of Adcash Activity");
-    //	super.mLayout.removeView(htmlInterstitialWebView);
-    //	htmlInterstitialWebView.removeAllViews();
-        htmlInterstitialWebView.destroy();
+        mHtmlInterstitialWebView.loadUrl(WEB_VIEW_DID_CLOSE.getUrl());
+        mHtmlInterstitialWebView.destroy();
+        broadcastInterstitialAction(ACTION_INTERSTITIAL_DISMISS);
         super.onDestroy();
     }
 
-    private class BroadcastingInterstitialListener implements CustomEventInterstitialListener {
+    class BroadcastingInterstitialListener implements CustomEventInterstitialListener {
         @Override
         public void onInterstitialLoaded() {
+            mHtmlInterstitialWebView.loadUrl(WEB_VIEW_DID_APPEAR.getUrl());
         }
 
         @Override
@@ -97,7 +143,6 @@ public class AdcashActivity extends BaseInterstitialActivity {
 
         @Override
         public void onInterstitialShown() {
-            broadcastInterstitialAction(ACTION_INTERSTITIAL_SHOW);
         }
 
         @Override

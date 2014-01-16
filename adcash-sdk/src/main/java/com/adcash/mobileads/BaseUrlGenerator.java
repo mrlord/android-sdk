@@ -63,6 +63,7 @@ public abstract class BaseUrlGenerator {
     protected String mAdUnitId;
     protected String mKeywords;
     protected Location mLocation;
+    protected boolean mFacebookSupportEnabled;
 
     public static enum AdcashNetworkType {
         UNKNOWN,

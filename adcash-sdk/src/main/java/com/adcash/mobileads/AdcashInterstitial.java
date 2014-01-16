@@ -1,19 +1,19 @@
 /*
- * Copyright (c) 2010 - 2013, Adcash OU and MoPub Inc.
+ * Copyright (c) 2010-2013, Adcash Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
  * met:
  *
- * * Redistributions of source code must retain the above copyright
+ *  Redistributions of source code must retain the above copyright
  *   notice, this list of conditions and the following disclaimer.
  *
- * * Redistributions in binary form must reproduce the above copyright
+ *  Redistributions in binary form must reproduce the above copyright
  *   notice, this list of conditions and the following disclaimer in the
  *   documentation and/or other materials provided with the distribution.
  *
- * * Neither the name of 'MoPub Inc.' nor the names of its contributors
+ *  Neither the name of 'MoPub Inc.' nor the names of its contributors
  *   may be used to endorse or promote products derived from this software
  *   without specific prior written permission.
  *
@@ -35,16 +35,15 @@ package com.adcash.mobileads;
 import android.app.Activity;
 import android.content.Context;
 import android.location.Location;
-import com.adcash.mobileads.Log;
-
+import android.util.Log;
 import com.adcash.mobileads.AdcashView.LocationAwareness;
 import com.adcash.mobileads.factories.CustomEventInterstitialAdapterFactory;
 
-import java.util.Map;
+import java.util.*;
 
-import static com.adcash.mobileads.AdFetcher.CUSTOM_EVENT_DATA_HEADER;
-import static com.adcash.mobileads.AdFetcher.CUSTOM_EVENT_NAME_HEADER;
 import static com.adcash.mobileads.AdcashErrorCode.ADAPTER_NOT_FOUND;
+import static com.adcash.mobileads.util.ResponseHeader.CUSTOM_EVENT_DATA;
+import static com.adcash.mobileads.util.ResponseHeader.CUSTOM_EVENT_NAME;
 
 public class AdcashInterstitial implements CustomEventInterstitialAdapter.CustomEventInterstitialAdapterListener {
 
@@ -93,7 +92,6 @@ public class AdcashInterstitial implements CustomEventInterstitialAdapter.Custom
     }
 
     public void load() {
-    	Log.d("Adcash", "Loading interstitial");
         resetCurrentInterstitial();
         mInterstitialView.loadAd();
     }
@@ -104,8 +102,6 @@ public class AdcashInterstitial implements CustomEventInterstitialAdapter.Custom
     }
 
     private void resetCurrentInterstitial() {
-    	Log.d("Adcash", "Reset current interstitial");
-
         mCurrentInterstitialState = InterstitialState.NOT_READY;
 
         if (mCustomEventInterstitialAdapter != null) {
@@ -117,8 +113,6 @@ public class AdcashInterstitial implements CustomEventInterstitialAdapter.Custom
     }
 
     public boolean isReady() {
-    	Log.d("Adcash", "Checking if interstitial is ready");
-
         return mCurrentInterstitialState.isReady();
     }
 
@@ -127,8 +121,6 @@ public class AdcashInterstitial implements CustomEventInterstitialAdapter.Custom
     }
 
     public boolean show() {
-    	Log.d("Adcash", "Showing interstitial");
-
         switch (mCurrentInterstitialState) {
             case CUSTOM_EVENT_AD_READY:
                 showCustomEventInterstitial();
@@ -141,6 +133,14 @@ public class AdcashInterstitial implements CustomEventInterstitialAdapter.Custom
         if (mCustomEventInterstitialAdapter != null) mCustomEventInterstitialAdapter.showInterstitial();
     }
 
+    Integer getAdTimeoutDelay() {
+        return mInterstitialView.getAdTimeoutDelay();
+    }
+
+    AdcashInterstitialView getAdcashInterstitialView() {
+        return mInterstitialView;
+    }
+
     ////////////////////////////////////////////////////////////////////////////////////////////////
 
     public void setKeywords(String keywords) {
@@ -149,6 +149,14 @@ public class AdcashInterstitial implements CustomEventInterstitialAdapter.Custom
 
     public String getKeywords() {
         return mInterstitialView.getKeywords();
+    }
+
+    public void setFacebookSupported(boolean enabled) {
+        mInterstitialView.setFacebookSupported(enabled);
+    }
+
+    public boolean isFacebookSupported() {
+        return mInterstitialView.isFacebookSupported();
     }
 
     public Activity getActivity() {
@@ -160,10 +168,7 @@ public class AdcashInterstitial implements CustomEventInterstitialAdapter.Custom
     }
 
     public void destroy() {
-    	Log.d("Adcash", "Destroying interstitial");
-
         mIsDestroyed = true;
-        mCurrentInterstitialState = InterstitialState.NOT_READY;
 
         if (mCustomEventInterstitialAdapter != null) {
             mCustomEventInterstitialAdapter.invalidate();
@@ -213,7 +218,7 @@ public class AdcashInterstitial implements CustomEventInterstitialAdapter.Custom
     public Map<String, Object> getLocalExtras() {
         return mInterstitialView.getLocalExtras();
     }
-    
+
     /*
      * Implements CustomEventInterstitialAdapter.CustomEventInterstitialListener
      */
@@ -240,12 +245,10 @@ public class AdcashInterstitial implements CustomEventInterstitialAdapter.Custom
     }
 
     @Override
-    public void onCustomEventInterstitialShown(boolean shouldTrackImpressions) {
+    public void onCustomEventInterstitialShown() {
         if (isDestroyed()) return;
 
-        if (shouldTrackImpressions) {
-            mInterstitialView.trackImpression();
-        }
+        mInterstitialView.trackImpression();
 
         if (mInterstitialAdListener != null) {
             mInterstitialAdListener.onInterstitialShown(this);
@@ -299,8 +302,8 @@ public class AdcashInterstitial implements CustomEventInterstitialAdapter.Custom
 
             mCustomEventInterstitialAdapter = CustomEventInterstitialAdapterFactory.create(
                     AdcashInterstitial.this,
-                    paramsMap.get(CUSTOM_EVENT_NAME_HEADER),
-                    paramsMap.get(CUSTOM_EVENT_DATA_HEADER));
+                    paramsMap.get(CUSTOM_EVENT_NAME.getKey()),
+                    paramsMap.get(CUSTOM_EVENT_DATA.getKey()));
             mCustomEventInterstitialAdapter.setAdapterListener(AdcashInterstitial.this);
             mCustomEventInterstitialAdapter.loadInterstitial();
         }

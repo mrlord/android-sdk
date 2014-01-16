@@ -1,3 +1,35 @@
+/*
+ * Copyright (c) 2010-2013, Adcash Inc.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are
+ * met:
+ *
+ *  Redistributions of source code must retain the above copyright
+ *   notice, this list of conditions and the following disclaimer.
+ *
+ *  Redistributions in binary form must reproduce the above copyright
+ *   notice, this list of conditions and the following disclaimer in the
+ *   documentation and/or other materials provided with the distribution.
+ *
+ *  Neither the name of 'MoPub Inc.' nor the names of its contributors
+ *   may be used to endorse or promote products derived from this software
+ *   without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 package com.adcash.mobileads;
 
 import android.content.Context;
@@ -5,17 +37,19 @@ import android.os.Handler;
 import android.util.Log;
 import com.adcash.mobileads.CustomEventInterstitial.CustomEventInterstitialListener;
 import com.adcash.mobileads.factories.CustomEventInterstitialFactory;
+import com.adcash.mobileads.util.Json;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 
+import static com.adcash.mobileads.AdFetcher.AD_CONFIGURATION_KEY;
 import static com.adcash.mobileads.AdcashErrorCode.ADAPTER_NOT_FOUND;
 import static com.adcash.mobileads.AdcashErrorCode.NETWORK_TIMEOUT;
 import static com.adcash.mobileads.AdcashErrorCode.UNSPECIFIED;
 
 public class CustomEventInterstitialAdapter implements CustomEventInterstitialListener {
-    public static final int TIMEOUT_DELAY = 30000;
+    public static final int DEFAULT_INTERSTITIAL_TIMEOUT_DELAY = 30000;
 
+    private final AdcashInterstitial mAdcashInterstitial;
     private boolean mInvalidated;
     private CustomEventInterstitialAdapterListener mCustomEventInterstitialAdapterListener;
     private CustomEventInterstitial mCustomEventInterstitial;
@@ -27,6 +61,7 @@ public class CustomEventInterstitialAdapter implements CustomEventInterstitialLi
 
     public CustomEventInterstitialAdapter(AdcashInterstitial adCashInterstitial, String className, String jsonParams) {
         mHandler = new Handler();
+        mAdcashInterstitial = adCashInterstitial;
         mServerExtras = new HashMap<String, String>();
         mLocalExtras = new HashMap<String, Object>();
         mContext = adCashInterstitial.getActivity();
@@ -49,20 +84,31 @@ public class CustomEventInterstitialAdapter implements CustomEventInterstitialLi
         
         // Attempt to load the JSON extras into mServerExtras.
         try {
-            mServerExtras = Utils.jsonStringToMap(jsonParams);
+            mServerExtras = Json.jsonStringToMap(jsonParams);
         } catch (Exception exception) {
             Log.d("Adcash", "Failed to create Map from JSON: " + jsonParams);
         }
         
         mLocalExtras = adCashInterstitial.getLocalExtras();
-        if (adCashInterstitial.getLocation() != null) mLocalExtras.put("location", adCashInterstitial.getLocation());
+        if (adCashInterstitial.getLocation() != null) {
+            mLocalExtras.put("location", adCashInterstitial.getLocation());
+        }
+
+        AdViewController adViewController = adCashInterstitial.getAdcashInterstitialView().getAdViewController();
+        if (adViewController != null) {
+            mLocalExtras.put(AD_CONFIGURATION_KEY, adViewController.getAdConfiguration());
+        }
     }
     
     void loadInterstitial() {
-        if (isInvalidated() || mCustomEventInterstitial == null) return;
-
-        mHandler.postDelayed(mTimeout, TIMEOUT_DELAY);
+        if (isInvalidated() || mCustomEventInterstitial == null) {
+            return;
+        }
         mCustomEventInterstitial.loadInterstitial(mContext, this, mLocalExtras, mServerExtras);
+
+        if (getTimeoutDelayMilliseconds() > 0) {
+            mHandler.postDelayed(mTimeout, getTimeoutDelayMilliseconds());
+        }
     }
     
     void showInterstitial() {
@@ -93,14 +139,20 @@ public class CustomEventInterstitialAdapter implements CustomEventInterstitialLi
         mHandler.removeCallbacks(mTimeout);
     }
 
-    private boolean shouldTrackImpressions() {
-        return !(mCustomEventInterstitial instanceof HtmlInterstitial);
+    private int getTimeoutDelayMilliseconds() {
+        if (mAdcashInterstitial == null
+                || mAdcashInterstitial.getAdTimeoutDelay() == null
+                || mAdcashInterstitial.getAdTimeoutDelay() < 0) {
+            return DEFAULT_INTERSTITIAL_TIMEOUT_DELAY;
+        }
+
+        return mAdcashInterstitial.getAdTimeoutDelay() * 1000;
     }
 
     interface CustomEventInterstitialAdapterListener {
         void onCustomEventInterstitialLoaded();
         void onCustomEventInterstitialFailed(AdcashErrorCode errorCode);
-        void onCustomEventInterstitialShown(boolean shouldTrackImpressions);
+        void onCustomEventInterstitialShown();
         void onCustomEventInterstitialClicked();
         void onCustomEventInterstitialDismissed();
     }
@@ -110,7 +162,9 @@ public class CustomEventInterstitialAdapter implements CustomEventInterstitialLi
      */
     @Override
     public void onInterstitialLoaded() {
-        if (isInvalidated()) return;
+        if (isInvalidated()) {
+            return;
+        }
 
         if (mCustomEventInterstitialAdapterListener != null) {
             cancelTimeout();
@@ -120,7 +174,9 @@ public class CustomEventInterstitialAdapter implements CustomEventInterstitialLi
 
     @Override
     public void onInterstitialFailed(AdcashErrorCode errorCode) {
-        if (isInvalidated()) return;
+        if (isInvalidated()) {
+            return;
+        }
 
         if (mCustomEventInterstitialAdapterListener != null) {
             if (errorCode == null) {
@@ -133,16 +189,24 @@ public class CustomEventInterstitialAdapter implements CustomEventInterstitialLi
 
     @Override
     public void onInterstitialShown() {
-        if (isInvalidated()) return;
+        if (isInvalidated()) {
+            return;
+        }
 
-        if (mCustomEventInterstitialAdapterListener != null) mCustomEventInterstitialAdapterListener.onCustomEventInterstitialShown(shouldTrackImpressions());
+        if (mCustomEventInterstitialAdapterListener != null) {
+            mCustomEventInterstitialAdapterListener.onCustomEventInterstitialShown();
+        }
     }
 
     @Override
     public void onInterstitialClicked() {
-        if (isInvalidated()) return;
+        if (isInvalidated()) {
+            return;
+        }
 
-        if (mCustomEventInterstitialAdapterListener != null) mCustomEventInterstitialAdapterListener.onCustomEventInterstitialClicked();
+        if (mCustomEventInterstitialAdapterListener != null) {
+            mCustomEventInterstitialAdapterListener.onCustomEventInterstitialClicked();
+        }
     }
 
     @Override

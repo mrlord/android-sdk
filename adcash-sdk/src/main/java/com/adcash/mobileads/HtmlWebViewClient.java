@@ -1,21 +1,51 @@
+/*
+ * Copyright (c) 2010-2013, Adcash Inc.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are
+ * met:
+ *
+ *  Redistributions of source code must retain the above copyright
+ *   notice, this list of conditions and the following disclaimer.
+ *
+ *  Redistributions in binary form must reproduce the above copyright
+ *   notice, this list of conditions and the following disclaimer in the
+ *   documentation and/or other materials provided with the distribution.
+ *
+ *  Neither the name of 'MoPub Inc.' nor the names of its contributors
+ *   may be used to endorse or promote products derived from this software
+ *   without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 package com.adcash.mobileads;
 
-import android.app.Activity;
-import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.net.Uri;
+import android.util.Log;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import java.util.List;
-import com.adcash.mobileads.Log;
 
 import static com.adcash.mobileads.AdcashErrorCode.UNSPECIFIED;
 
 class HtmlWebViewClient extends WebViewClient {
+    static final String ADCASH_FINISH_LOAD = "adcash://finishLoad";
+    static final String ADCASH_FAIL_LOAD = "adcash://failLoad";
+
     private final Context mContext;
     private HtmlWebViewListener mHtmlWebViewListener;
     private BaseHtmlWebView mHtmlWebView;
@@ -32,25 +62,21 @@ class HtmlWebViewClient extends WebViewClient {
 
     @Override
     public boolean shouldOverrideUrlLoading(WebView view, String url) {
-        if (handleSpecialAdcashScheme(url) || handlePhoneScheme(url)) {
+        if (handleSpecialAdcashScheme(url) || handlePhoneScheme(url) || handleNativeBrowserScheme(url)) {
             return true;
-        }
-        
-        if (isMarketUrl(url) && !canHandleMarketUrl(url)) {
-            return true;
-        }
-        
-        if (isMarketUrl(url) && canHandleMarketUrl(url))
-        {
-        	handleMarketScheme(url);
-        	return true;
         }
 
         url = urlWithClickTrackingRedirect(url);
         Log.d("Adcash", "Ad clicked. Click URL: " + url);
-        mHtmlWebViewListener.onClicked();
 
-        showBrowserForUrl(url);
+        // this is added because http/s can also be intercepted
+        if (!isWebSiteUrl(url) && canHandleApplicationUrl(url)) {
+            if (launchApplicationUrl(url)) {
+                return true;
+            }
+        }
+
+        showMraidBrowserForUrl(url);
         return true;
     }
 
@@ -60,82 +86,104 @@ class HtmlWebViewClient extends WebViewClient {
         if (mRedirectUrl != null && url.startsWith(mRedirectUrl)) {
             url = urlWithClickTrackingRedirect(url);
             view.stopLoading();
-            showBrowserForUrl(url);
+            showMraidBrowserForUrl(url);
         }
     }
 
-    private boolean handleSpecialAdcashScheme(String url) {
-        if (!url.startsWith("adcash://")) return false;
+    private boolean isSpecialAdcashScheme(String url) {
+        return url.startsWith("adcash://");
+    }
 
+    private boolean handleSpecialAdcashScheme(String url) {
+        if (!isSpecialAdcashScheme(url)) {
+            return false;
+        }
         Uri uri = Uri.parse(url);
         String host = uri.getHost();
 
-        if (host.equals("finishLoad")) {
+        if ("finishLoad".equals(host)) {
             mHtmlWebViewListener.onLoaded(mHtmlWebView);
-        } else if (host.equals("close")) {
+        } else if ("close".equals(host)) {
             mHtmlWebViewListener.onCollapsed();
-        } else if (host.equals("failLoad")) {
+        } else if ("failLoad".equals(host)) {
             mHtmlWebViewListener.onFailed(UNSPECIFIED);
-        } else if (host.equals("custom")) {
+        } else if ("custom".equals(host)) {
             handleCustomIntentFromUri(uri);
         }
 
         return true;
     }
 
-    private boolean handlePhoneScheme(String url) {
-        if (!isPhoneIntent(url)) return false;
-
-        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        try {
-            mContext.startActivity(intent);
-            mHtmlWebViewListener.onClicked();
-        } catch (ActivityNotFoundException e) {
-            Log.w("Adcash", "Could not handle intent with URI: " + url +
-                    ". Is this intent unsupported on your phone?");
-        }
-
-        return true;
-    }
-
-    private boolean handleMarketScheme(String url) {
-        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        try {
-            mContext.startActivity(intent);
-            mHtmlWebViewListener.onClicked();
-        } catch (ActivityNotFoundException e) {
-            Log.w("Adcash", "Could not handle market intent with URI: " + url +
-                    ". Is this intent unsupported on your phone?");
-        }
-
-        return true;
-    }
-
-    
-    private boolean isPhoneIntent(String url) {
+    private boolean isPhoneScheme(String url) {
         return url.startsWith("tel:") || url.startsWith("voicemail:") ||
                 url.startsWith("sms:") || url.startsWith("mailto:") ||
                 url.startsWith("geo:") || url.startsWith("google.streetview:");
     }
 
-    private boolean isMarketUrl(String url) {
-        return url.startsWith("market://");
+    private boolean handlePhoneScheme(String url) {
+        if (!isPhoneScheme(url)) {
+            return false;
+        }
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+
+        String errorMessage = "Could not handle intent with URI: " + url
+                + ". Is this intent supported on your phone?";
+
+        launchIntentForUserClick(mContext, intent, errorMessage);
+
+        return true;
     }
 
-    private boolean canHandleMarketUrl(String url) {
-        // Determine which activities can handle the market intent
+    private boolean isNativeBrowserScheme(String url) {
+        return url.startsWith("adcashnativebrowser://");
+    }
+
+    private boolean handleNativeBrowserScheme(String url) {
+        if (!isNativeBrowserScheme(url)) {
+            return false;
+        }
+
+        Uri uri = Uri.parse(url);
+
+        String urlToOpenInNativeBrowser;
+        try {
+            urlToOpenInNativeBrowser = uri.getQueryParameter("url");
+        } catch (UnsupportedOperationException e) {
+            Log.w("Adcash", "Could not handle url: " + url);
+            return false;
+        }
+
+        if (!"navigate".equals(uri.getHost()) || urlToOpenInNativeBrowser == null) {
+            return false;
+        }
+
+        Uri intentUri = Uri.parse(urlToOpenInNativeBrowser);
+
+        Intent intent = new Intent(Intent.ACTION_VIEW, intentUri);
+        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+
+        String errorMessage = "Could not handle intent with URI: " + url
+                + ". Is this intent supported on your phone?";
+
+        launchIntentForUserClick(mContext, intent, errorMessage);
+
+        return true;
+    }
+
+    private boolean isWebSiteUrl(String url) {
+        return url.startsWith("http://") || url.startsWith("https://");
+    }
+
+    private boolean canHandleApplicationUrl(String url) {
+        // Determine which activities can handle the intent
         Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-        PackageManager packageManager = mContext.getPackageManager();
-        List<ResolveInfo> activities = packageManager.queryIntentActivities(intent, 0);
 
         // If there are no relevant activities, don't follow the link
-        boolean isIntentSafe = activities.size() > 0;
-        if (!isIntentSafe) {
-            Log.w("Adcash", "Could not handle market action: " + url
-                    + ". Perhaps you're running in the emulator, which does not have "
-                    + "the Android Market?");
+        if (!Utils.deviceCanHandleIntent(mContext, intent)) {
+            Log.w("Adcash", "Could not handle application specific action: " + url + ". " +
+                    "You may be running in the emulator or another device which does not " +
+                    "have the required application.");
             return false;
         }
 
@@ -151,39 +199,79 @@ class HtmlWebViewClient extends WebViewClient {
         }
     }
 
-    private void showBrowserForUrl(String url) {
+    private boolean launchApplicationUrl(String url) {
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+
+        String errorMessage = "Unable to open intent.";
+
+        return launchIntentForUserClick(mContext, intent, errorMessage);
+    }
+
+    private void showMraidBrowserForUrl(String url) {
         if (url == null || url.equals("")) url = "about:blank";
         Log.d("Adcash", "Final URI to show in browser: " + url);
         Intent intent = new Intent(mContext, MraidBrowser.class);
         intent.putExtra(MraidBrowser.URL_EXTRA, url);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
 
-        try {
-            mContext.startActivity(intent);
-        } catch (ActivityNotFoundException e) {
-            String action = intent.getAction();
-            Log.w("Adcash", "Could not handle intent action: " + action
-                    + ". Perhaps you forgot to declare com.adcash.mobileads.MraidBrowser"
-                    + " in your Android manifest file.");
+        String errorMessage = "Could not handle intent action. "
+                + ". Perhaps you forgot to declare com.adcash.mobileads.MraidBrowser"
+                + " in your Android manifest file.";
 
-            mContext.startActivity(
-                    new Intent(Intent.ACTION_VIEW, Uri.parse("about:blank"))
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        boolean handledByMraidBrowser = launchIntentForUserClick(mContext, intent, errorMessage);
+
+        if (!handledByMraidBrowser) {
+            intent = new Intent(Intent.ACTION_VIEW, Uri.parse("about:blank"));
+            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            launchIntentForUserClick(mContext, intent, null);
         }
     }
 
     private void handleCustomIntentFromUri(Uri uri) {
-        mHtmlWebViewListener.onClicked();
-        String action = uri.getQueryParameter("fnc");
-        String adData = uri.getQueryParameter("data");
+        String action;
+        String adData;
+        try {
+            action = uri.getQueryParameter("fnc");
+            adData = uri.getQueryParameter("data");
+        } catch (UnsupportedOperationException e) {
+            Log.w("Adcash", "Could not handle custom intent with uri: " + uri);
+            return;
+        }
+
         Intent customIntent = new Intent(action);
         customIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         customIntent.putExtra(HtmlBannerWebView.EXTRA_AD_CLICK_DATA, adData);
-        try {
-            mContext.startActivity(customIntent);
-        } catch (ActivityNotFoundException e) {
-            Log.w("Adcash", "Could not handle custom intent: " + action +
-                    ". Is your intent spelled correctly?");
+
+        String errorMessage = "Could not handle custom intent: " + action
+                + ". Is your intent spelled correctly?";
+
+        launchIntentForUserClick(mContext, customIntent, errorMessage);
+    }
+
+    boolean launchIntentForUserClick(Context context, Intent intent, String errorMessage) {
+        if (!mHtmlWebView.wasClicked()) {
+            return false;
         }
+
+        boolean wasIntentStarted = executeIntent(context, intent, errorMessage);
+        if (wasIntentStarted) {
+            mHtmlWebViewListener.onClicked();
+            mHtmlWebView.onResetUserClick();
+        }
+
+        return wasIntentStarted;
+    }
+
+    private boolean executeIntent(Context context, Intent intent, String errorMessage) {
+        try {
+            context.startActivity(intent);
+        } catch (Exception e) {
+            Log.d("Adcash", (errorMessage != null)
+                    ? errorMessage
+                    : "Unable to start intent.");
+            return false;
+        }
+        return true;
     }
 }

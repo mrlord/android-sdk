@@ -1,19 +1,19 @@
 /*
- * Copyright (c) 2010 - 2013, Adcash OU and MoPub Inc.
+ * Copyright (c) 2010-2013, Adcash Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
  * met:
  *
- * * Redistributions of source code must retain the above copyright
+ *  Redistributions of source code must retain the above copyright
  *   notice, this list of conditions and the following disclaimer.
  *
- * * Redistributions in binary form must reproduce the above copyright
+ *  Redistributions in binary form must reproduce the above copyright
  *   notice, this list of conditions and the following disclaimer in the
  *   documentation and/or other materials provided with the distribution.
  *
- * * Neither the name of 'MoPub Inc.' nor the names of its contributors
+ *  Neither the name of 'MoPub Inc.' nor the names of its contributors
  *   may be used to endorse or promote products derived from this software
  *   without specific prior written permission.
  *
@@ -38,26 +38,22 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.location.Location;
-import android.os.Build;
 import android.util.AttributeSet;
+import android.util.Log;
 import android.view.View;
-import com.adcash.mobileads.Log;
 import android.webkit.WebViewDatabase;
 import android.widget.FrameLayout;
 import com.adcash.mobileads.factories.AdViewControllerFactory;
 import com.adcash.mobileads.factories.CustomEventBannerAdapterFactory;
 
-import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
-import java.util.Collections;
-import java.util.Map;
+import java.util.*;
 
-import static com.adcash.mobileads.AdFetcher.CUSTOM_EVENT_DATA_HEADER;
-import static com.adcash.mobileads.AdFetcher.CUSTOM_EVENT_NAME_HEADER;
 import static com.adcash.mobileads.AdcashErrorCode.ADAPTER_NOT_FOUND;
+import static com.adcash.mobileads.util.ResponseHeader.CUSTOM_EVENT_DATA;
+import static com.adcash.mobileads.util.ResponseHeader.CUSTOM_EVENT_NAME;
 
 public class AdcashView extends FrameLayout {
-    
+
     public interface BannerAdListener {
         public void onBannerLoaded(AdcashView banner);
         public void onBannerFailed(AdcashView banner, AdcashErrorCode errorCode);
@@ -65,24 +61,23 @@ public class AdcashView extends FrameLayout {
         public void onBannerExpanded(AdcashView banner);
         public void onBannerCollapsed(AdcashView banner);
     }
-    
+
     public enum LocationAwareness {
         LOCATION_AWARENESS_NORMAL, LOCATION_AWARENESS_TRUNCATED, LOCATION_AWARENESS_DISABLED
     }
 
-    public static final String HOST = "mad.adcash.com";
+    public static final String HOST = "m.adcash.com";
     public static final String HOST_FOR_TESTING = "testing.adcash.com";
-    public static final String AD_HANDLER = "/m/ad.php";
+    public static final String AD_HANDLER = "/ad.php";
     public static final int DEFAULT_LOCATION_PRECISION = 6;
 
     protected AdViewController mAdViewController;
     protected CustomEventBannerAdapter mCustomEventBannerAdapter;
-    
+
     private Context mContext;
     private BroadcastReceiver mScreenStateReceiver;
     private boolean mIsInForeground;
     private LocationAwareness mLocationAwareness;
-    private int mLocationPrecision;
     private boolean mPreviousAutorefreshSetting = false;
     
     private BannerAdListener mBannerAdListener;
@@ -104,11 +99,10 @@ public class AdcashView extends FrameLayout {
         mContext = context;
         mIsInForeground = (getVisibility() == VISIBLE);
         mLocationAwareness = LocationAwareness.LOCATION_AWARENESS_NORMAL;
-        mLocationPrecision = DEFAULT_LOCATION_PRECISION;
-        
+
         setHorizontalScrollBarEnabled(false);
         setVerticalScrollBarEnabled(false);
-        
+
         // There is a rare bug in Froyo/2.2 where creation of a WebView causes a
         // NullPointerException. (http://code.google.com/p/android/issues/detail?id=10789)
         // It happens when the WebView can't access the local file store to make a cache file.
@@ -120,57 +114,14 @@ public class AdcashView extends FrameLayout {
                     "http://code.google.com/p/android/issues/detail?id=10789");
             return;
         }
-        
-        initVersionDependentAdView(context);
+
+        mAdViewController = AdViewControllerFactory.create(context, this);
         registerScreenStateBroadcastReceiver();
-    }
-    
-    private void initVersionDependentAdView(Context context) {
-        int sdkVersion = (new Integer(Build.VERSION.SDK)).intValue();
-        if (sdkVersion < 7) {
-        	mAdViewController = AdViewControllerFactory.create(context, this);
-        } else {
-            // On Android 2.1 (Eclair) and up, try to load our HTML5-enabled AdViewController class.
-            Class<?> HTML5AdViewClass = null;
-            try {
-                HTML5AdViewClass = (Class<?>) Class.forName("com.adcash.mobileads.HTML5AdView");
-            } catch (ClassNotFoundException e) {
-                mAdViewController = AdViewControllerFactory.create(context, this);
-                return;
-            } 
-
-            Class<?>[] parameterTypes = new Class[2];
-            parameterTypes[0] = Context.class;
-            parameterTypes[1] = AdcashView.class;
-
-            Object[] args = new Object[2];
-            args[0] = context;
-            args[1] = this;
-
-            try {
-                Constructor<?> constructor = HTML5AdViewClass.getConstructor(parameterTypes);
-                mAdViewController = (AdViewController) constructor.newInstance(args);
-            } catch (SecurityException e) {
-                Log.e("Adcash", "Could not load HTML5AdView.");
-            } catch (NoSuchMethodException e) {
-                Log.e("Adcash", "Could not load HTML5AdView.");
-            } catch (IllegalArgumentException e) {
-                Log.e("Adcash", "Could not load HTML5AdView.");
-            } catch (InstantiationException e) {
-                Log.e("Adcash", "Could not load HTML5AdView.");
-            } catch (IllegalAccessException e) {
-                Log.e("Adcash", "Could not load HTML5AdView.");
-            } catch (InvocationTargetException e) {
-                Log.e("Adcash", "Could not load HTML5AdView.");
-            }
-
-            if (mAdViewController == null) mAdViewController = AdViewControllerFactory.create(context, this);
-        }
     }
 
     private void registerScreenStateBroadcastReceiver() {
         if (mAdViewController == null) return;
-        
+
         mScreenStateReceiver = new BroadcastReceiver() {
             public void onReceive(Context context, Intent intent) {
                 if (intent.getAction().equals(Intent.ACTION_SCREEN_OFF)) {
@@ -181,7 +132,7 @@ public class AdcashView extends FrameLayout {
                             mAdViewController.setAutorefreshEnabled(false);
                         }
                     } else {
-                        Log.d("Adcash", "Screen sleep but ad in background; " + 
+                        Log.d("Adcash", "Screen sleep but ad in background; " +
                                 "refresh should already be disabled");
                     }
                 } else if (intent.getAction().equals(Intent.ACTION_USER_PRESENT)) {
@@ -200,7 +151,7 @@ public class AdcashView extends FrameLayout {
         filter.addAction(Intent.ACTION_USER_PRESENT);
         mContext.registerReceiver(mScreenStateReceiver, filter);
     }
-    
+
     private void unregisterScreenStateBroadcastReceiver() {
         try {
             mContext.unregisterReceiver(mScreenStateReceiver);
@@ -208,11 +159,11 @@ public class AdcashView extends FrameLayout {
             Log.d("Adcash", "Failed to unregister screen state broadcast receiver (never registered).");
         }
     }
-    
+
     public void loadAd() {
         if (mAdViewController != null) mAdViewController.loadAd();
     }
-    
+
     /*
      * Tears down the ad view: no ads will be shown once this method executes. The parent
      * Activity's onDestroy implementation must include a call to this method.
@@ -220,16 +171,20 @@ public class AdcashView extends FrameLayout {
     public void destroy() {
         unregisterScreenStateBroadcastReceiver();
         removeAllViews();
-        
+
         if (mAdViewController != null) {
             mAdViewController.cleanup();
             mAdViewController = null;
         }
-        
+
         if (mCustomEventBannerAdapter != null) {
             mCustomEventBannerAdapter.invalidate();
             mCustomEventBannerAdapter = null;
         }
+    }
+
+    Integer getAdTimeoutDelay() {
+        return (mAdViewController != null) ? mAdViewController.getAdTimeoutDelay() : null;
     }
 
     protected void loadFailUrl(AdcashErrorCode errorCode) {
@@ -251,8 +206,8 @@ public class AdcashView extends FrameLayout {
 
         mCustomEventBannerAdapter = CustomEventBannerAdapterFactory.create(
                 this,
-                paramsMap.get(CUSTOM_EVENT_NAME_HEADER),
-                paramsMap.get(CUSTOM_EVENT_DATA_HEADER));
+                paramsMap.get(CUSTOM_EVENT_NAME.getKey()),
+                paramsMap.get(CUSTOM_EVENT_DATA.getKey()));
         mCustomEventBannerAdapter.loadAd();
     }
 
@@ -269,11 +224,11 @@ public class AdcashView extends FrameLayout {
         Log.d("Adcash", "Tracking impression for native adapter.");
         if (mAdViewController != null) mAdViewController.trackImpression();
     }
-    
+
     @Override
     protected void onWindowVisibilityChanged(int visibility) {
         if (mAdViewController == null) return;
-        
+
         if (visibility == VISIBLE) {
             Log.d("Adcash", "Ad Unit ("+ mAdViewController.getAdUnitId()+") going visible: enabling refresh");
             mIsInForeground = true;
@@ -311,7 +266,7 @@ public class AdcashView extends FrameLayout {
             mOnAdPresentedOverlayListener.OnAdPresentedOverlay(this);
         }
     }
-    
+
     protected void adClosed() {
         if (mBannerAdListener != null) {
             mBannerAdListener.onBannerCollapsed(this);
@@ -327,24 +282,36 @@ public class AdcashView extends FrameLayout {
             mOnAdClickedListener.OnAdClicked(this);
         }
     }
-    
+
     protected void nativeAdLoaded() {
         if (mAdViewController != null) mAdViewController.scheduleRefreshTimerIfEnabled();
         adLoaded();
     }
-    
+
     ////////////////////////////////////////////////////////////////////////////////////////////////
 
     public void setAdUnitId(String adUnitId) {
         if (mAdViewController != null) mAdViewController.setAdUnitId(adUnitId);
     }
-    
+
+    public String getAdUnitId() {
+        return (mAdViewController != null) ? mAdViewController.getAdUnitId() : null;
+    }
+
     public void setKeywords(String keywords) {
         if (mAdViewController != null) mAdViewController.setKeywords(keywords);
     }
 
     public String getKeywords() {
         return (mAdViewController != null) ? mAdViewController.getKeywords() : null;
+    }
+
+    public void setFacebookSupported(boolean enabled) {
+        if (mAdViewController != null) mAdViewController.setFacebookSupported(enabled);
+    }
+
+    public boolean isFacebookSupported() {
+        return (mAdViewController != null) ? mAdViewController.isFacebookSupported() : false;
     }
 
     public void setLocation(Location location) {
@@ -370,11 +337,11 @@ public class AdcashView extends FrameLayout {
     public String getResponseString() {
         return (mAdViewController != null) ? mAdViewController.getResponseString() : null;
     }
-    
+
     public void setClickthroughUrl(String url) {
         if (mAdViewController != null) mAdViewController.setClickthroughUrl(url);
     }
-    
+
     public String getClickthroughUrl() {
         return (mAdViewController != null) ? mAdViewController.getClickthroughUrl() : null;
     }
@@ -382,15 +349,15 @@ public class AdcashView extends FrameLayout {
     public Activity getActivity() {
         return (Activity) mContext;
     }
-    
+
     public void setBannerAdListener(BannerAdListener listener) {
         mBannerAdListener = listener;
     }
-    
+
     public BannerAdListener getBannerAdListener() {
         return mBannerAdListener;
     }
-    
+
     public void setLocationAwareness(LocationAwareness awareness) {
         mLocationAwareness = awareness;
     }
@@ -400,137 +367,143 @@ public class AdcashView extends FrameLayout {
     }
 
     public void setLocationPrecision(int precision) {
-        mLocationPrecision = (precision >= 0) ? precision : 0;
+        if (mAdViewController != null) {
+            mAdViewController.setLocationPrecision(precision);
+        }
     }
 
     public int getLocationPrecision() {
-        return mLocationPrecision;
+        return (mAdViewController != null) ? mAdViewController.getLocationPrecision() : 0;
     }
-    
+
     public void setLocalExtras(Map<String, Object> localExtras) {
         if (mAdViewController != null) mAdViewController.setLocalExtras(localExtras);
     }
-    
+
     public Map<String, Object> getLocalExtras() {
         if (mAdViewController != null) return mAdViewController.getLocalExtras();
         return Collections.emptyMap();
     }
-    
+
     public void setAutorefreshEnabled(boolean enabled) {
         if (mAdViewController != null) mAdViewController.setAutorefreshEnabled(enabled);
     }
-    
+
     public boolean getAutorefreshEnabled() {
         if (mAdViewController != null) return mAdViewController.getAutorefreshEnabled();
         else {
-            Log.d("Adcash", "Can't get autorefresh status for destroyed AdcashView. " + 
+            Log.d("Adcash", "Can't get autorefresh status for destroyed AdcashView. " +
                     "Returning false.");
             return false;
         }
     }
-    
+
     public void setAdContentView(View view) {
         if (mAdViewController != null) mAdViewController.setAdContentView(view);
     }
-    
+
     public void setTesting(boolean testing) {
         if (mAdViewController != null) mAdViewController.setTesting(testing);
     }
-    
+
     public boolean getTesting() {
         if (mAdViewController != null) return mAdViewController.getTesting();
         else {
-            Log.d("Adcash", "Can't get testing status for destroyed AdcashView. " + 
+            Log.d("Adcash", "Can't get testing status for destroyed AdcashView. " +
                     "Returning false.");
             return false;
         }
     }
-    
+
     public void forceRefresh() {
         if (mCustomEventBannerAdapter != null) {
             mCustomEventBannerAdapter.invalidate();
             mCustomEventBannerAdapter = null;
         }
-        
+
         if (mAdViewController != null) mAdViewController.forceRefresh();
     }
-    
+
+    AdViewController getAdViewController() {
+        return mAdViewController;
+    }
+
     @Deprecated
     public interface OnAdWillLoadListener {
         public void OnAdWillLoad(AdcashView m, String url);
     }
-    
+
     @Deprecated
     public interface OnAdLoadedListener {
         public void OnAdLoaded(AdcashView m);
     }
-    
+
     @Deprecated
     public interface OnAdFailedListener {
         public void OnAdFailed(AdcashView m);
     }
-    
+
     @Deprecated
     public interface OnAdClosedListener {
         public void OnAdClosed(AdcashView m);
     }
-    
+
     @Deprecated
     public interface OnAdClickedListener {
         public void OnAdClicked(AdcashView m);
     }
-    
+
     @Deprecated
     public interface OnAdPresentedOverlayListener {
         public void OnAdPresentedOverlay(AdcashView m);
     }
-    
+
     @Deprecated
     public void setOnAdWillLoadListener(OnAdWillLoadListener listener) {
         mOnAdWillLoadListener = listener;
     }
-    
+
     @Deprecated
     public void setOnAdLoadedListener(OnAdLoadedListener listener) {
         mOnAdLoadedListener = listener;
     }
-    
+
     @Deprecated
     public void setOnAdFailedListener(OnAdFailedListener listener) {
         mOnAdFailedListener = listener;
     }
-    
+
     @Deprecated
     public void setOnAdPresentedOverlayListener(OnAdPresentedOverlayListener listener) {
         mOnAdPresentedOverlayListener = listener;
     }
-    
+
     @Deprecated
     public void setOnAdClosedListener(OnAdClosedListener listener) {
         mOnAdClosedListener = listener;
     }
-    
+
     @Deprecated
     public void setOnAdClickedListener(OnAdClickedListener listener) {
         mOnAdClickedListener = listener;
     }
-    
+
     @Deprecated
     protected void adWillLoad(String url) {
         Log.d("Adcash", "adWillLoad: " + url);
         if (mOnAdWillLoadListener != null) mOnAdWillLoadListener.OnAdWillLoad(this, url);
     }
-    
+
     @Deprecated
     public void customEventDidLoadAd() {
         if (mAdViewController != null) mAdViewController.customEventDidLoadAd();
     }
-    
+
     @Deprecated
     public void customEventDidFailToLoadAd() {
         if (mAdViewController != null) mAdViewController.customEventDidFailToLoadAd();
     }
-    
+
     @Deprecated
     public void customEventActionWillBegin() {
         if (mAdViewController != null) mAdViewController.customEventActionWillBegin();

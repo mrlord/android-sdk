@@ -50,8 +50,8 @@ import com.adcash.mobileads.Log;
 import static android.content.Context.MODE_PRIVATE;
 
 public class AdcashConversionTracker {
-    private static final String TRACK_HOST = "mad.adcash.com";
-    private static final String TRACK_HANDLER = "/m/open.php";
+    private static final String TRACK_HOST = "m.adcash.com";
+    private static final String TRACK_HANDLER = "/open.php";
     public static final String PREFERENCE_NAME = "adcashSettings";
     
     private Context mContext;
